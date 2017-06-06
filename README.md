@@ -1,7 +1,8 @@
 
 # Thinsite Quickstart
-This is a simple quickstart project.  
+This is a bare-bones quickstart project for thinsite
 
-Place your code in (or import it into) the source/main.js file 
-Build your code with "npm run build"
-View your code by browsing to the index.html
+1. Use "npm install" 
+2. Place your code in (or import it into) the source/main.js file 
+3. Build your code with "npm run build"
+4. View your code by browsing to the index.html
