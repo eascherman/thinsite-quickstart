@@ -2,6 +2,7 @@
   "name": "thinsite-quickstart",
   "version": "1.0.0",
   "description": "a basic quickstart project",
+  "repository": "https://github.com/eascherman/thinsite-quickstart",
   "main": "",
   "dependencies": {
     "rollup": "^0.42.0",
