@@ -3,7 +3,7 @@ import resolve from 'rollup-plugin-node-resolve';
 import babel from 'rollup-plugin-babel';
 
 export default {
-  entry: 'source/main.js',
+  entry: 'public/main.js',
   format: 'umd',
   sourceMap: true,
   plugins: [
@@ -12,5 +12,5 @@ export default {
       exclude: 'node_modules/**' // only transpile our source code
     })
   ],
-  dest: 'main.build.js'
+  dest: 'public/main.build.js'
 };

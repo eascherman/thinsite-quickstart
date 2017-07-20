@@ -25,7 +25,22 @@ function invalidate(obj) {
 }
 
 
-
+function re(arg1, arg2, arg3, arg4) {
+    if (arg1 === undefined)
+        return getterSetter();
+    else if (typeof arg2 === 'string') {
+        if (!Object.defineProperty)
+            throw new Error('Object.defineProperty is not supported');
+        if (arg3) {
+            if (Array.isArray(arg3))
+                return arrayProperty(arg1, arg2, arg3);
+            else
+                return relativeProperty(arg1, arg2, arg3, arg4);
+        } else
+            return alerterProperty(arg1, arg2);
+    } else if (arg1 instanceof Function)
+        return relativeGetterSetter(arg1, arg2);
+}
 
 
 
@@ -35,10 +50,78 @@ var currentDependent;
 var onInvalidateQueue = [];
 
 // a getterSetter that detects array changes
+function getterSetter() {
+    // var out = {
+    //     id: newId(),
+    //     dependents: {},
+    //     get: function get() {
+    //         if (currentDependent)
+    //             out.dependents[currentDependent.id] = currentDependent;
+
+    //         return out.value;
+    //     },
+    //     set: function set(value) {
+    //         if (out.value !== value) {
+    //             if (Array.isArray(value))
+    //                 arrayFuncNotifiers(value);
+    //             out.value = value;
+    //             invalidate(out);
+    //         } 
+    //     }
+    // };
+    var out = function get() {
+        if (currentDependent)
+            out.dependents[currentDependent.id] = currentDependent;
+
+        return out.value;
+    };
+    out.id = newId();
+    out.dependents = {};
+    out.get = out;
+    out.set = function set(value) {
+        if (out.value !== value) {
+            if (Array.isArray(value))
+                arrayFuncNotifiers(value);
+            out.value = value;
+            invalidate(out);
+        } 
+    };
+
+    return out;
+}
 
 
+function arrayGetterSetter(arr) {
+    if (!arr._reProxy) {     // proxy array modifiers so changes can be noted
+        arr._reProxy =  getterSetter();  
+        arr._reProxy.value = arr;
 
+        arr.getValueLocation = function getValueLocation(value) {
+            for (var i=0; i<arr.length; i++) 
+                if (arr[i] === value)
+                    return i;
+            throw new Error('Position value not found in array');
+        };
 
+        arr.insertBeforeValue = function insertBeforeValue(item, positionValue) {
+            return arr.splice(arr.getValueLocation(positionValue), 0, item);
+        };
+
+        arr.removeValue = function removeValue(item) {
+            return arr.splice(arr.getValueLocation(item), 1);
+        };
+
+        ['push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse']
+            .forEach(function(method) {
+                var func = arr[method];
+                arr[method] = function() {
+                    func.apply(this, arguments);
+                    invalidate(arr._reProxy);
+                };
+            });
+    }
+    return arr._reProxy;
+}
 
 
 function relativeGetterSetter(getter, setter) {
@@ -126,6 +209,44 @@ function onChange(trigger, callback) {
             continues = false;
         }
     };   
+}
+
+
+function arrayFuncNotifiers(arr) {
+    if (!arr._funcNotifiers) {
+        arr._funcNotifiers = arrayGetterSetter(arr);
+
+        ['reduce', 'forEach', 'map', 'filter']
+            .forEach(function(fName) {
+                var func = arr[fName];
+                arr[fName] = function() {
+                    arr._funcNotifiers.get();
+                    return func.apply(arr, arguments);
+                };
+            });
+    }
+}
+
+
+function alerterProperty(obj, prop) {
+    var value = obj[prop];
+    var gs = getterSetter();
+    gs.set(value);
+    Object.defineProperty(obj, prop, {
+        get: gs.get,
+        set: gs.set
+    });
+    return gs;
+}
+
+
+function relativeProperty(obj, prop, getter, setter) {
+    var gs = relativeGetterSetter(getter, setter);
+    Object.defineProperty(obj, prop, {
+        get: gs.get,
+        set: gs.set
+    });
+    return gs;
 }
 
 // liked a linked list but it can have a tree of children as well
@@ -665,6 +786,7 @@ class HtmlLocation extends LinkedTree {
                 this.ele = document.createElementNS(ns, obj.name);
             else
                 this.ele = document.createElement(obj.name);
+            this.host.insertBefore(this.ele, this.getElementAfter());
             if (obj.attributes) {
                 var attrsLocation = new AttributeLocation(this.ele);
                 attrsLocation.install(obj.attributes);
@@ -674,7 +796,6 @@ class HtmlLocation extends LinkedTree {
             }
             if (!this.ele) 
                 throw new Error('Content creation triggered its own removal');
-            this.host.insertBefore(this.ele, this.getElementAfter());
         } else if (obj instanceof Element) { 
             var parent = obj.parentElement;
             if (parent) {
@@ -745,7 +866,7 @@ function install(obj, host, before) {
     return loc;
 }
 
-(function() {
+var on = (function() {
     function on(name, callback) {
         return function(el) {
             return el.addEventListener(name, callback);
@@ -889,7 +1010,217 @@ function install(obj, host, before) {
     return on;
 })();
 
-let content = bundle`<h1>Hello, World!</h1>`;
+function eventTrigger(thiz) {
+    var counter = 1;
+    var out = function(callback) {
+        var id = counter++;
+        out.dependents[id] = callback;
+        out.remove = function() {
+            delete out.dependents[id];
+        };
+    };
+    out.trigger = function() {
+        var args = arguments;
+        Object.keys(out.dependents).forEach(function(key) {
+            var callback = out.dependents[key];
+            callback.apply(thiz, args);
+        });
+    };
+    out.dependents = {};
+
+    return out;
+}
+
+function alertArray(arr) {
+    if (!arr.onRemove) {
+        arr.onRemove = eventTrigger(arr);
+        arr.onInsert = eventTrigger(arr);
+
+        var push = arr.push;
+        arr.push = function(val) {
+            var out = push.call(arr, val);
+            arr.onInsert.trigger(val, arr.length);
+            return out;
+        };
+
+        var pop = arr.pop;
+        arr.pop = function() {
+            var out = pop.apply(arr);
+            arr.onRemove.trigger(arr.length - 1);
+            return out;
+        };
+
+        var shift = arr.shift;
+        arr.shift = function() {
+            var out = shift.apply(arr);
+            arr.onRemove.trigger(0);
+            return out;
+        };
+
+        var unshift = arr.unshift;
+        arr.unshift = function(val) {
+            var out = unshift.call(arr, val);
+            arr.onRemove.trigger(val, 0);
+            return out;
+        };
+
+        var splice = arr.splice;
+        arr.splice = function(pos, deleteCount) {
+            pos = pos.valueOf(); 
+            var out = splice.apply(arr, arguments);
+            while (deleteCount > 0) {
+                arr.onRemove.trigger(pos + deleteCount - 1);
+                deleteCount--;
+            }
+            for (var i=2; i<arguments.length; i++) {
+                var item = arguments[i];
+                arr.onInsert.trigger(item, pos + i - 2);
+            }
+            return out;
+        };
+    }
+}
+
+function bindMap(arr, transform) {
+    function posGetter(val) {
+        var out = function getPos() {
+            for (var i=0; i<arr.length; i++)
+                if (val === arr[i])
+                    return i;
+        };
+        out.valueOf = out;
+        return out;
+    }
+
+    // map via for loop to prevent undesired change detection
+    var out = [];
+    for (var i=0; i<arr.length; i++) {
+        var item = arr[i];
+        var tItem = transform(item, posGetter(item), arr);
+        out.push(tItem);
+    }
+
+    alertArray(arr);
+    arr.onRemove(function(pos) {
+        return out.splice(pos, 1);
+    });
+    arr.onInsert(function(item, pos) {
+        var tItem = transform(item, posGetter(item), arr);
+        return out.splice(pos, 0, tItem);
+    });
+
+    return out;
+}
+
+function arrInstall(arr) {
+    alertArray(arr);
+    var initialized = false;
+    var installations = [];
+
+    return function(el, loc) {
+        if (!initialized) {
+            initialized = true;
+
+            arr.onRemove(function(pos) {
+                arr;
+                var inst = installations[pos];
+                try {
+                    inst.remove();
+                } catch (err) {}
+                installations.splice(pos, 1);
+            });
+            arr.onInsert(function(item, pos) {
+                arr;
+                var instPos = installations[pos];
+                var inst;
+                if (instPos)
+                    inst = instPos.insertContent(item);
+                else
+                    inst = loc.installChild(item, el, loc.namespace);
+                installations.splice(pos, 0, inst);
+            });
+
+            arr.forEach(function(item) {
+                var inst = loc.installChild(item, el, loc.namespace);
+                installations.push(inst);
+            });
+        }
+    };
+}
+
+
+function map(obj, transform) {
+    if (obj.then instanceof Function && !Array.isArray(obj)) {     // doing this rather than Promise.resolve to allow non-promise output when possible
+        return Promise.resolve(obj).then(arr =>
+            arrInstall(bindMap(arr, transform))
+        );
+    } else {
+        return arrInstall(bindMap(obj, transform));
+    }
+}
+
+function http(reqType, endpoint, data) {
+    return new Promise((resolve, reject) => {
+        let xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function () {
+            if (this.readyState == 4) {
+                if (this.status == 200) {
+                    let json = this.responseText;
+                    if (json) {
+                        let obj = JSON.parse(json);
+                        resolve(obj);
+                    } else {
+                        resolve(undefined);
+                    }
+                } else if (this.status != 200) {
+                    reject(this.responseText);
+                }
+            }
+        };
+        reqType = reqType.toUpperCase();
+        xhttp.open(reqType, endpoint, true);
+        if (data instanceof Object) {
+            data = JSON.stringify(data);
+        }
+        xhttp.send(data);
+    });
+}
+
+http.get = endpoint => http('GET', endpoint);
+http.put = (endpoint, data) => http('PUT', endpoint, data);
+http.post = (endpoint, data) => http('POST', endpoint, data);
+http.delete = (endpoint, data) => http('DELETE', endpoint, data);
+
+let state = {};
+re(state, 'cows');
+
+let loadCows = () => state.cows = http.get('cows');
+loadCows();
+
+function deleteCow(cow) {
+    let name = encodeURIComponent(cow);
+    http.delete('cows/' + name).then(loadCows);
+}
+
+let newCowInput;
+function addCow() {
+    let name = encodeURIComponent(newCowInput.value);
+    if (name) {
+        http.post('cows/' + name).then(loadCows);
+        newCowInput.value = '';
+    }
+}
+
+let content = bundle`<h1>Farmer John's Cows</h1>
+
+    ${() => map(state.cows, cow => bundle`<p>
+            ${cow}
+            <button ${on.click(() => deleteCow(cow))}>x</button>
+        </p>`)}
+    
+    <input ${el => newCowInput = el} placeholder="new cow"
+        ${on.keydown.enter(addCow)} />
+    <button ${on.click(addCow)}>add</button>`;
 
 install(content, document.body);
 
