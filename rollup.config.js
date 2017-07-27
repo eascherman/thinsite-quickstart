@@ -9,7 +9,7 @@ export default {
   plugins: [
     resolve(),
     babel({
-      exclude: 'node_modules/**' // only transpile our source code
+      //exclude: 'node_modules/**' // only transpile our source code
     })
   ],
   dest: 'public/main.build.js'
